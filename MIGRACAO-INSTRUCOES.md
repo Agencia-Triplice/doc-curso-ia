@@ -32,6 +32,33 @@ Apenas os **arquivos de código-fonte da aplicação** entregues neste pacote
 (`src/`, `static/`, `test/`), aplicando as mudanças descritas nos manifestos `FIX-*.md`.
 Nada de infraestrutura/ambiente.
 
+## 2.1 ⚠ O FRONT MORA 100% EM `static/` — SUBSTITUIR É OBRIGATÓRIO
+
+Os fronts do `dvop-bff-curadoria` e do `dvop-bff-log-view` são **SPA sem build**: todo o
+HTML/CSS/JS vive em **`static/`** e é servido direto pelo Nest
+(`ServeStaticModule`, `rootPath: join(__dirname, '..', 'static')`). Com `start =
+node dist/main.js`, isso resolve para `dist/../static`, ou seja **a pasta `static/` na raiz
+do projeto** — e o `static/` **NÃO entra no `nest build`/`dist`**.
+
+**Consequência:** se você atualizar só `src/` (e refizer o `dist/`) mas **deixar o `static/`
+antigo**, o front continua o antigo — mesmo com o backend novo. Sintoma típico: a aba do
+navegador mostra o título/telas antigos.
+
+**Portanto, na migração, SUBSTITUA a pasta `static/` inteira** (`index.html`, `css/`, `js/`)
+pela deste pacote, para cada serviço:
+- `dvop-bff-curadoria/static/` → por cima do `static/` do destino
+- `dvop-bff-log-view/static/` → por cima do `static/` do destino (inclui `cockpit.html`)
+
+Depois **reinicie** o processo e faça **hard refresh** no navegador (`Ctrl+Shift+R`).
+
+**Verificação (no destino):**
+```bash
+curl -s localhost:8004/index.html | grep -i "<title>"   # curadoria: "Bex · Curadoria & Elegibilidade DVOP"
+curl -s localhost:8004/css/app.css | grep -c "bex-red"  # > 0
+```
+Se o `<title>` vier o antigo ("dvop - curadoria"), o `static/` servido ainda é o velho:
+confirme que o `static/` do destino é **irmão do `dist/`** que o `node dist/main.js` executa.
+
 ## 3. Procedimento seguro
 
 1. Copie o **código** (`src/`, `static/`, `test/`) sobre o destino **sem** tocar nos
