@@ -1,0 +1,36 @@
+# Sobe o bff-curadoria (Node/NestJS) isolado. Para a stack completa, use os
+# compose dos demais serviços (ms5/ms3/ms8) e aponte as envs abaixo para os
+# nomes de container deles na mesma rede.
+services:
+  bff-curadoria:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: dvop-bff-curadoria:0.1.0
+    container_name: dvop-bff-curadoria
+    ports:
+      - "8004:8004"
+    environment:
+      # cache-writer (MS 5): fila de órfãos + gravação de soluções — obrigatório.
+      # aponte para o nome do serviço/container do MS 5 na rede do compose.
+      CURADORIA_BFF_MS5_URL: http://dvop-srv-cache-writer:8002
+      CURADORIA_BFF_ELEGIBILIDADE_DB_PATH: /opt/app-root/src/data/elegibilidade.db
+      CURADORIA_BFF_LOG_LEVEL: INFO
+      # retrieval (MS 3): contexto p/ o prompt do Copilot; vazio = desabilitado
+      # CURADORIA_BFF_MS3_URL: http://dvop-srv-retrieval:8003
+      # catálogo de remediações (MS 8): elegibilidade a PR; vazio = desabilitado
+      # CURADORIA_BFF_MS8_URL: http://dvop-srv-remediation:8007
+      # worker curador automático (Agentix) — vazio = desligado (zero custo de LLM)
+      # CURADORIA_BFF_AGENTIX_URL:
+      # CURADORIA_BFF_AGENTIX_TOKEN_URL:
+      # CURADORIA_BFF_AGENTIX_CLIENT_ID:
+      # CURADORIA_BFF_AGENTIX_CLIENT_SECRET:
+      # CURADORIA_BFF_AGENTIX_TENANT_ID:
+      # CURADORIA_BFF_AGENTIX_BUNDLE_VERSION:
+      # CURADORIA_BFF_AGENTIX_ENTITY_ID:
+    volumes:
+      - bff-curadoria-data:/opt/app-root/src/data
+    restart: unless-stopped
+
+volumes:
+  bff-curadoria-data:

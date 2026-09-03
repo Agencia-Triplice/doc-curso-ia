@@ -1,0 +1,31 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+  workflow_dispatch:
+jobs:
+  esteira:
+    uses: GDD-Core/esteiras-workflows/.github/workflows/ci-bff-node.yml@main
+    with:
+      node-version: "22"
+      publicar: false
+      docker: true
+      # ACS desligado neste repo: o scan reprova por 2 HIGH de OpenSSL (libcrypto3/
+      # libssl3, CVE-2026-14456) que vêm da imagem base Alpine — sem relação com o
+      # código deste serviço, corrigíveis só bumpando a base (3.5.7-r0 -> 3.5.8-r0).
+      # Waiver de DEV para destravar o cd; rearmar (acs: true) quando a base subir.
+      acs: false
+      docker-push: ${{ github.event_name != 'pull_request' }}
+      registry: registry.meucardapioqrcode.com.br
+    secrets:
+      NEXUS_NPM_TOKEN: ${{ secrets.NEXUS_NPM_TOKEN }}
+      NEXUS_DOCKER_USER: ${{ secrets.NEXUS_DOCKER_USER }}
+      NEXUS_DOCKER_PASS: ${{ secrets.NEXUS_DOCKER_PASS }}
+  cd:
+    if: ${{ github.event_name != 'pull_request' }}
+    needs: esteira
+    uses: GDD-Core/esteiras-workflows/.github/workflows/cd.yml@main
+    with: { chart: bff-node }
+    secrets:
+      ESTEIRA_CONFIG_PAT: ${{ secrets.ESTEIRA_CONFIG_PAT }}
+      ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
