@@ -3,6 +3,10 @@
 **Projeto completo** dos microsserviços alterados + os manifestos `FIX-*.md` (o que mudou e
 como implementar), para reimplementar/migrar as mudanças em **outro ambiente**.
 
+> 📦 **Download em zip:** [`doc-curso-ia.zip`](doc-curso-ia.zip) traz este pacote inteiro
+> (raiz `doc-curso-ia/`, caminhos com `/` — extrai certo em Windows, Linux e Mac). Baixe o
+> arquivo, extraia e siga este README.
+
 > ## ⚠ ANTES DE MIGRAR — leia `MIGRACAO-INSTRUCOES.md`
 > A migração substitui **apenas o código-fonte da aplicação**. Ela **NÃO pode alterar nada
 > no destino** relativo a **proxy**, **certificados do Bradesco / CA corporativa**,
