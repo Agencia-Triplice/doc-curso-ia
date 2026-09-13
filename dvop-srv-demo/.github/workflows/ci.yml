@@ -1,0 +1,175 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  esteira:
+    uses: GDD-Core/esteiras-workflows/.github/workflows/ci-srv-java.yml@main
+    with:
+      java-version: "21"
+      # Maven publica o jar no Nexus (maven-hosted). Re-deploy da MESMA versao
+      # (RELEASE + ALLOW_ONCE) retorna o 400 "does not allow updating assets".
+      publicar: true
+      docker: true
+      docker-push: ${{ github.event_name != 'pull_request' }}
+      registry: registry.meucardapioqrcode.com.br
+      # test bed: tag pura <versao> (dvop-srv-demo:1.0.0). Re-publicar a MESMA versao
+      # colide no docker-hosted ALLOW_ONCE -> demonstra o erro "versao ja existe".
+      tag-mode: version
+    secrets:
+      NEXUS_MAVEN_USER: ${{ secrets.NEXUS_MAVEN_USER }}
+      NEXUS_MAVEN_PASS: ${{ secrets.NEXUS_MAVEN_PASS }}
+      NEXUS_DOCKER_USER: ${{ secrets.NEXUS_DOCKER_USER }}
+      NEXUS_DOCKER_PASS: ${{ secrets.NEXUS_DOCKER_PASS }}
+  # O deploy E este job: renderiza o manifesto e commita em <app>-config, dispara
+  # o sync explicito no ArgoCD e verifica (Synced/Healthy). Autosync desligado.
+  cd:
+    if: ${{ github.event_name != 'pull_request' }}
+    needs: esteira
+    uses: GDD-Core/esteiras-workflows/.github/workflows/cd.yml@main
+    with: { chart: srv-java, tag-mode: version }
+    secrets:
+      ESTEIRA_CONFIG_PAT: ${{ secrets.ESTEIRA_CONFIG_PAT }}
+      ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+
+  # Acionado SÓ quando a esteira falha. Roda no runner in-cluster (label
+  # cockpit-diag), manda o job falho ao cockpit e escreve o diagnóstico no
+  # resumo do job. Best-effort: nunca abre PR, nunca derruba o run.
+  diagnostico-falha:
+    needs: [esteira]
+    if: ${{ failure() }}
+    runs-on: [self-hosted, cockpit-diag]
+    timeout-minutes: 3
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write   # comentar o diagnóstico no PR (quando a falha for em PR)
+      checks: write          # criar Check Run com o diagnóstico
+      issues: write          # rotular o PR conforme o estado do diagnóstico
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Diagnosticar falha no cockpit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COCKPIT_ANALISAR_URL: ${{ vars.COCKPIT_ANALISAR_URL }}
+          COCKPIT_WEB_URL: ${{ vars.COCKPIT_WEB_URL }}
+          MASCOTE_URL: ${{ vars.MASCOTE_URL }}
+          MASCOTE_BASE_URL: ${{ vars.MASCOTE_BASE_URL }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CHECK_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -uo pipefail
+
+          # Guard de dependências (runner in-cluster já traz curl/jq).
+          for t in curl jq; do
+            command -v "$t" >/dev/null 2>&1 || {
+              echo "::warning title=Diagnóstico automático::\`$t\` ausente no runner; etapa pulada."
+              echo "Diagnóstico automático: \`$t\` ausente no runner; etapa pulada." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            }
+          done
+
+          # Guard de configuração.
+          if [ -z "${COCKPIT_ANALISAR_URL:-}" ]; then
+            echo "::warning title=Diagnóstico automático::COCKPIT_ANALISAR_URL não configurado; etapa pulada."
+            echo "Diagnóstico automático: \`COCKPIT_ANALISAR_URL\` não configurado; etapa pulada." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Mascote do resumo: o render-summary escolhe um clipe ANIMADO por estado
+          # (mascote-{conhecido,pr,novo,indisponivel}.webp) a partir da base pública
+          # do cockpit. Se MASCOTE_BASE_URL não veio explícito, deriva do host PÚBLICO
+          # do cockpit (COCKPIT_WEB_URL, sem o fragmento `#/...`), que serve `static/`.
+          # Assim os mascotes viajam com a app, sem repo de assets externo. Uma
+          # MASCOTE_URL fixa (var) ainda vence e vira imagem única. Ambos vazios ⇒
+          # resumo sem imagem.
+          if [ -z "${MASCOTE_BASE_URL:-}" ] && [ -n "${COCKPIT_WEB_URL:-}" ]; then
+            base="${COCKPIT_WEB_URL%%#*}"   # tira "#/..."
+            base="${base%/}"                # tira barra final
+            MASCOTE_BASE_URL="${base}"
+          fi
+          export MASCOTE_URL MASCOTE_BASE_URL
+
+          # 1) Resolve TODOS os jobs falhos deste run (nome + URL com /job/<id>).
+          jobs_json="$(curl -sS \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
+            2>/dev/null || true)"
+          # Linhas "<url>\t<nome>\t<passo>" — exclui o próprio job de diagnóstico.
+          # <passo> = número do 1º passo falho do job (para deep-link #step:N:1).
+          failed="$(printf '%s' "$jobs_json" \
+            | jq -r '.jobs[]?
+                | select(.conclusion=="failure")
+                | select(.name|test("diagnostico-falha")|not)
+                | . as $j
+                | ([$j.steps[]? | select(.conclusion=="failure") | .number] | first) as $step
+                | "\($j.html_url)\t\($j.name)\t\($step // "")"' \
+            2>/dev/null || true)"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          [ -z "$failed" ] && failed="${run_url}\t\t"
+          n_falhos="$(printf '%b' "$failed" | grep -c . || true)"
+
+          # Acumula o markdown de TODOS os jobs (resumo do job + comentário no PR).
+          summary_md="$(mktemp)"
+          # Índice quando mais de um job falhou.
+          [ "${n_falhos:-0}" -gt 1 ] && printf '> **%s jobs falharam nesta execução.**\n\n' "$n_falhos" >> "$summary_md"
+
+          # 2) Para cada job falho: envia ao cockpit e renderiza log + resumo.
+          while IFS="$(printf '\t')" read -r target_url job_name step_no; do
+            [ -z "$target_url" ] && continue
+            # URL limpa vai pro cockpit; a de exibição ganha o deep-link do passo.
+            display_url="$target_url"
+            [ -n "$step_no" ] && display_url="${target_url}#step:${step_no}:1"
+
+            resp="$(curl -sS -X POST "$COCKPIT_ANALISAR_URL" \
+              -H 'Content-Type: application/json' \
+              --data "$(jq -nc --arg m "$target_url" --arg t "$GH_TOKEN" '{message:$m, github_token:$t}')" \
+              2>/dev/null || true)"
+
+            if [ -z "$resp" ] || ! printf '%s' "$resp" | jq -e . >/dev/null 2>&1; then
+              echo "::warning title=Diagnóstico automático::Cockpit indisponível para ${job_name:-$target_url}; usando heurística."
+              # Modo degradado: palpite a partir do log do próprio job.
+              bash .github/diagnostico/heuristic-diagnose.sh "$display_url" "$job_name" >> "$summary_md"
+              continue
+            fi
+
+            # LOG da action (banner de texto + anotações; uso interno).
+            printf '%s' "$resp" | bash .github/diagnostico/render-log.sh "$display_url"
+            # Resumo em markdown (acumulado).
+            printf '%s' "$resp" \
+              | bash .github/diagnostico/render-summary.sh "$display_url" "$job_name" \
+              >> "$summary_md"
+          done <<< "$(printf '%b' "$failed")"
+
+          # 3) Escreve no resumo do job.
+          cat "$summary_md" >> "$GITHUB_STEP_SUMMARY"
+
+          # 4) Se a falha foi numa Pull Request, posta/atualiza o comentário sticky
+          #    e rotula o PR conforme o estado (marcador <!-- estado:X -->).
+          if [ -n "${PR_NUMBER:-}" ]; then
+            bash .github/diagnostico/post-pr-comment.sh "$PR_NUMBER" < "$summary_md"
+
+            label=""
+            if grep -q '<!-- estado:conhecido -->' "$summary_md"; then label="ci:erro-conhecido"
+            elif grep -q '<!-- estado:novo -->' "$summary_md"; then label="ci:erro-novo"
+            elif grep -q '<!-- estado:indisponivel -->' "$summary_md"; then label="ci:diagnostico-indisponivel"
+            fi
+            if [ -n "$label" ]; then
+              curl -sS -X POST \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
+                --data "$(jq -nc --arg l "$label" '{labels:[$l]}')" >/dev/null 2>&1 || true
+            fi
+          fi
+
+          # 5) Publica o diagnóstico como Check Run (aba de checks do commit/PR).
+          bash .github/diagnostico/post-check-run.sh "neutral" "Diagnóstico automático" < "$summary_md"
+          exit 0

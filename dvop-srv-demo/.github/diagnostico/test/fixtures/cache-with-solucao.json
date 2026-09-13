@@ -1,0 +1,24 @@
+{
+  "trace": {
+    "passos": [
+      {"chave":"assinatura","rotulo":"Assinatura","valor":"blob upload invalid","estado":"info"},
+      {"chave":"resultado","rotulo":"Resultado","valor":"match exato no cache","estado":"ok"}
+    ],
+    "desfecho": {
+      "resultado":"cache_exato",
+      "fingerprint":"abc123",
+      "servico":"dvop-srv-demo",
+      "nivel":"job",
+      "assinatura":"blob upload invalid",
+      "similaridade":1,
+      "solucao":{
+        "fingerprint":"abc123",
+        "solucao":"1. Verifique se a versão já existe no repositório. 2. Ajuste a versão do projeto para uma nova ainda não publicada. 3. Reexecute a pipeline.\n\n---\nConfiança: media",
+        "autor":"IA (Agentix)",
+        "criado_em":"2026-09-11T00:14:27Z"
+      }
+    }
+  },
+  "itens_extras": [],
+  "acoes": {}
+}
