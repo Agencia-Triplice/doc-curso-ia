@@ -1,8 +1,0 @@
-{
-  "trace": {
-    "passos": [{"chave":"erro","rotulo":"Erro na importação","valor":"404: run não encontrado","estado":"erro"}],
-    "desfecho": null
-  },
-  "itens_extras": [],
-  "acoes": {}
-}

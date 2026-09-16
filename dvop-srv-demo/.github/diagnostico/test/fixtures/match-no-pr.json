@@ -1,8 +1,0 @@
-{
-  "trace": {
-    "passos": [{"chave":"resultado","rotulo":"Resultado","valor":"escalado para a curadoria","estado":"info"}],
-    "desfecho": {"resultado":"escalado","fingerprint":"def456","servico":null,"nivel":null,"assinatura":"erro desconhecido"}
-  },
-  "itens_extras": [],
-  "acoes": {}
-}
