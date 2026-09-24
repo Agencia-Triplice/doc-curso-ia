@@ -20,11 +20,16 @@ PG_DSN = os.environ.get(
     "options=-csearch_path=retrieval",
 )
 
-# Modelo de embedding — decisao do ADR.
-EMBED_MODEL = os.environ.get("RETRIEVAL_EMBED_MODEL", "text-embedding-3-small")
-EMBED_DIM = int(os.environ.get("RETRIEVAL_EMBED_DIM", "1536"))
+# Modelo de embedding — text-embedding-3-large (3072-d) para MAXIMA precisao.
+# Trocar de modelo exige RE-EMBEDAR tudo e casar a dimensao da coluna em schema.sql.
+# ESCALA: pgvector nao indexa vector()>2000d com HNSW; a 3072d o HNSW vai num
+# cast halfvec (ver schema.sql). O modelo aceita 'dimensions' p/ reduzir se um dia
+# quiser HNSW em vector() puro (<=2000d) — hoje mantemos os 3072 cheios.
+EMBED_MODEL = os.environ.get("RETRIEVAL_EMBED_MODEL", "text-embedding-3-large")
+EMBED_DIM = int(os.environ.get("RETRIEVAL_EMBED_DIM", "3072"))
 
-# Gate de grounding por cosseno (recalibravel). ADR: ~0.30-0.55 no 3-small.
+# Gate de grounding por cosseno (recalibravel). No 3-large a distribuicao de cosseno
+# MUDA em relacao ao 3-small — RECALIBRE com dados reais (partida ~0.30-0.55).
 GROUNDING_THRESHOLD = float(os.environ.get("RETRIEVAL_GROUNDING_THRESHOLD", "0.35"))
 
 # RRF e funil de candidatos.

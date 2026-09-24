@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS chunks (
   conteudo      TEXT NOT NULL,                    -- texto EXIBIDO
   embed_text    TEXT NOT NULL,                    -- o que VIRA vetor + alimenta o FTS
   checksum      TEXT NOT NULL UNIQUE,             -- sha256(embed_text) -> ingestao incremental
-  embedding     vector(1536),                     -- NULL ate embedar; distancia = cosseno (<=>)
+  embedding     vector(3072),                     -- text-embedding-3-large; NULL ate embedar; cosseno (<=>)
   metadata      JSONB NOT NULL DEFAULT '{}',
   fts           tsvector GENERATED ALWAYS AS
                   (to_tsvector('portuguese', coalesce(embed_text,''))) STORED,
@@ -45,9 +45,17 @@ CREATE INDEX IF NOT EXISTS chunks_fts_gin ON chunks USING gin (fts);
 CREATE INDEX IF NOT EXISTS chunks_doc     ON chunks (documento_id);
 
 -- DENSO: exato agora (seq scan = recall 100%, perfeito a 5-10k).
--- Ao cruzar ~50k, ligue o HNSW com UM comando (sem re-embedar, sem migrar):
--- CREATE INDEX chunks_emb_hnsw ON chunks
---   USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+-- ESCALA (>~50k chunks): pgvector NAO indexa vector() acima de 2000 dims com HNSW.
+-- Como aqui o embedding e 3072-d (text-embedding-3-large), o HNSW vai num CAST
+-- halfvec (meia-precisao, indexavel ate 4000d, perda de recall desprezivel) — SEM
+-- re-embedar nem migrar coluna:
+--   CREATE INDEX chunks_emb_hnsw ON chunks
+--     USING hnsw ((embedding::halfvec(3072)) halfvec_cosine_ops)
+--     WITH (m = 16, ef_construction = 64);
+--   SET hnsw.ef_search = 100;   -- recupera recall (ajuste latencia x recall)
+-- No app, o caminho aproximado casta a query tambem:
+--   ORDER BY embedding::halfvec(3072) <=> $q::halfvec(3072)
+-- (o caminho FLAT exato de hoje segue em vector(3072), sem cast, para rerank/grounding.)
 
 -- Camada de reuso exato (fingerprint -> cura), FORA do vetor. Alimentada pela
 -- varredura do GitHub e por erros curados. O log_erro tambem entra no corpus (RAG).

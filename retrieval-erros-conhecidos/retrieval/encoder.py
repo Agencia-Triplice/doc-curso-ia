@@ -1,5 +1,6 @@
-"""Encoder OpenAI (text-embedding-3-small, 1536-d) via stdlib urllib — sem dependencias.
-Batcha, tem retry com backoff e trunca entradas absurdas para caber na janela."""
+"""Encoder OpenAI (modelo em config.EMBED_MODEL; default text-embedding-3-large, 3072-d)
+via stdlib urllib — sem dependencias. Batcha, tem retry com backoff e trunca entradas
+absurdas para caber na janela."""
 import json
 import time
 import urllib.request

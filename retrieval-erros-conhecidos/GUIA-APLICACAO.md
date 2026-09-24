@@ -54,23 +54,40 @@ retrieval-erros-conhecidos/
   - `embed_text TEXT` — o texto **que vai para o vetor E para o FTS** (separado do
     conteúdo exibido). É onde entram **`aliases`** e **`perguntas_exemplo`**, o que
     resolve sigla ("kv" ≈ "key vault") e paráfrase.
-  - `embedding vector(1536)` — NULL até embedar; distância = **cosseno** (`<=>`).
+  - `embedding vector(3072)` — `text-embedding-3-large`; NULL até embedar; distância = **cosseno** (`<=>`).
   - `fts tsvector` — `to_tsvector('portuguese', embed_text)`, **GENERATED STORED**,
     índice **GIN**.
 - **`curas`** — reuso exato por `fingerprint`, com `assinatura` indexada por
   **GIN trigram** (`gin_trgm_ops`).
 
-**Índice denso: FLAT/exato hoje** (recall 100%, ideal a 5–10k chunks). HNSW é um
-toggle comentado em `schema.sql` — só liga ao cruzar ~50k chunks:
+**Índice denso: FLAT/exato hoje** (recall 100%, ideal a 5–10k chunks).
+
+### Escala com 3072-d (importante)
+
+⚠️ **O pgvector não indexa `vector()` acima de 2000 dimensões com HNSW/IVFFlat.** Como o
+`3-large` é **3072-d**, o HNSW precisa ir sobre um **cast `halfvec`** (meia-precisão,
+indexável até 4000-d, perda de recall desprezível). O plano de escala — **sem re-embedar
+nem migrar coluna** — é (já comentado em `schema.sql`):
 
 ```sql
+-- ao cruzar ~50k chunks:
 CREATE INDEX chunks_emb_hnsw ON chunks
-  USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
--- e recupere recall: SET hnsw.ef_search = 40;
+  USING hnsw ((embedding::halfvec(3072)) halfvec_cosine_ops) WITH (m = 16, ef_construction = 64);
+SET hnsw.ef_search = 100;   -- recupera recall (ajuste latência × recall)
+-- e no app, o caminho aproximado casta a query:
+--   ORDER BY embedding::halfvec(3072) <=> $q::halfvec(3072)
 ```
 
-> Na escala atual (~119 chunks úteis) **não use HNSW** — aproximado abriria mão do
-> recall perfeito sem ganho de latência. Fica no FLAT.
+O caminho **FLAT exato de hoje continua em `vector(3072)` full-precision** (para grounding
+e futuro reranker). Assim você tem **precisão máxima agora e escala pronta depois**.
+
+> Na escala atual (~119 chunks) **fique no FLAT** — exato, recall 100%, latência
+> irrelevante. Alternativa se um dia quiser HNSW em `vector()` puro: pedir `dimensions`
+> ≤2000 ao `3-large` (perde um pouco de precisão, ganha índice nativo sem halfvec).
+
+**Progressão sugerida:** FLAT `vector(3072)` até ~10k → avaliar em 10–50k → HNSW-halfvec
+acima de ~50k. Storage/RAM: 3072 float32 ≈ **12 KB/vetor**; em halfvec ≈ **6 KB/vetor**
+(o índice de escala já corta o custo de memória pela metade).
 
 ---
 
@@ -84,10 +101,15 @@ CREATE INDEX chunks_emb_hnsw ON chunks
 | `chunk_overlap_chars` | 220 | ~55 (~15,7%) |
 | `min_content_chars` | 350 | ~90 (piso p/ página valer chunk) |
 
-**Embeddings**: `text-embedding-3-small`, **1536 dimensões**, métrica cosseno
-(vetores normalizados pelo próprio operador `<=>`). Gerados por `encoder.py`.
-Chave OpenAI: via `OPENAI_API_KEY` **ou** arquivo `~/.claude/openai.txt`
-(`config.py:openai_key()`). **A chave não viaja no pacote** — configure a do destino.
+**Embeddings**: **`text-embedding-3-large`, 3072 dimensões** (escolha de máxima
+precisão), métrica cosseno (vetores normalizados pelo próprio operador `<=>`). Gerados
+por `encoder.py` (usa a dimensão nativa do modelo — nada a passar). Chave OpenAI: via
+`OPENAI_API_KEY` **ou** arquivo `~/.claude/openai.txt` (`config.py:openai_key()`).
+**A chave não viaja no pacote** — configure a do destino.
+
+> Trocar de/para o `3-small` (1536-d) exige **re-embedar tudo** e casar a dimensão da
+> coluna `embedding vector(...)` em `schema.sql`. Latência por resposta entre small e
+> large difere só ~dezenas de ms — desprezível; por isso a escolha é pela precisão.
 
 > Duas estratégias de chunk convivem: (A) `ingest_confluence.py` faz **chunking
 > semântico** por entrada (erro + remediação), casando com `embed_text`/curas —
