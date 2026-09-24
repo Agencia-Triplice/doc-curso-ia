@@ -1,0 +1,18 @@
+{
+  "generated_at": "2026-06-30T01:58:17.094Z",
+  "source_index": "../index.json",
+  "total_pages": 19,
+  "pages_with_content": 12,
+  "total_chunks": 127,
+  "embedding_ready_pages": 11,
+  "embedding_ready_chunks": 119,
+  "min_content_chars": 350,
+  "chunk_size_chars": 1400,
+  "chunk_overlap_chars": 220,
+  "outputs": {
+    "docs_dir": "docs/",
+    "corpus_jsonl": "corpus.jsonl",
+    "chunks_jsonl": "chunks.jsonl",
+    "chunks_content_only_jsonl": "chunks_content_only.jsonl"
+  }
+}
