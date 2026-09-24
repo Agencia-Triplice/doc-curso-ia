@@ -22,6 +22,7 @@ retrieval-erros-conhecidos/
 │  ├─ config.py               ← DSN, modelo/dim de embedding, limiares, RRF
 │  ├─ encoder.py              ← embeddings OpenAI text-embedding-3-small (1536-d)
 │  ├─ store.py                ← ingestão incremental + busca híbrida + grounding + curas
+│  ├─ reranker.py             ← cross-encoder opt-in (Jina) sobre o pool do RRF
 │  ├─ ingest_confluence.py    ← parser do acervo → documentos/chunks (chunking semântico)
 │  ├─ seed_howtos.py          ← dúvidas de processo (aliases/perguntas)
 │  ├─ sweep_github.py         ← varre runs falhos do GitHub → curas
@@ -130,11 +131,44 @@ Busca **híbrida em 3 camadas fundidas por RRF**, mais uma camada de curas:
 4. **Gate de grounding** — `top_cos >= GROUNDING_THRESHOLD` (**0.35**) marca a resposta
    como *grounded* (ver `to_search_response`). Quando um reranker for ligado, o score
    dele substitui o gate.
-5. **Curas** — antes da busca, reuso exato por `fingerprint` (`lookup_cura`), assinatura
+5. **Reranker (opt-in)** — quando ligado, um cross-encoder reranqueia o **pool** do RRF
+   (`RERANK_CANDIDATES=30`) e **o score dele substitui o gate de cosseno**; corta em `TOP_N`.
+6. **Curas** — antes da busca, reuso exato por `fingerprint` (`lookup_cura`), assinatura
    por GIN trigram.
 
 Parâmetros recalibráveis por env (todos em `config.py`): `RETRIEVAL_GROUNDING_THRESHOLD`,
 `RETRIEVAL_EMBED_MODEL`, `RETRIEVAL_EMBED_DIM`, `RETRIEVAL_PG_DSN`.
+
+### Reranker — a maior alavanca de precisão (`retrieval/reranker.py`)
+
+Um cross-encoder pontua o par (pergunta, passagem) diretamente — bem mais preciso que a
+similaridade de vetores. Fica **desligado por default** (comportamento idêntico ao híbrido
+puro); quando ligado, reordena o pool do RRF e sua pontuação vira o gate de grounding
+(`motivo:"reranker"`, `componentes.reranker:true`, `score_reranker` por hit). É
+**fail-open**: se a API falhar, a busca cai de volta na ordem do RRF — degrada, não quebra.
+
+Ligar (provider default Jina, forte em PT):
+```bash
+export RETRIEVAL_RERANKER=1
+export RERANKER_API_KEY="jina_..."     # ou grave em ~/.claude/jina.txt
+# opcionais:
+export RETRIEVAL_RERANKER_MODEL="jina-reranker-v2-base-multilingual"
+export RETRIEVAL_RERANK_CANDIDATES=30  # candidatos do RRF que entram no reranker
+export RETRIEVAL_RERANKER_THRESHOLD=0.30   # gate no score do reranker (0..1) — RECALIBRE
+```
+
+| Env | Default | Papel |
+|---|---|---|
+| `RETRIEVAL_RERANKER` | `0` | liga (`1`) / desliga |
+| `RETRIEVAL_RERANKER_PROVIDER` | `jina` | provider (troca em `reranker.py`) |
+| `RETRIEVAL_RERANKER_MODEL` | `jina-reranker-v2-base-multilingual` | modelo |
+| `RETRIEVAL_RERANKER_ENDPOINT` | `https://api.jina.ai/v1/rerank` | API |
+| `RETRIEVAL_RERANK_CANDIDATES` | `30` | tamanho do pool a reranquear |
+| `RETRIEVAL_RERANKER_THRESHOLD` | `0.30` | gate de grounding no score do reranker |
+
+**Latência**: ~dezenas de ms para 30 candidatos (uma chamada). **Trocar de provider**
+(ex.: cross-encoder BGE self-hosted, custo zero de API) = implementar outro `_post_*` em
+`reranker.py`; o `store` não conhece o provider. A chave do reranker **não viaja no pacote**.
 
 ---
 

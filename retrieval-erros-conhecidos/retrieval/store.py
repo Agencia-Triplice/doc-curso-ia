@@ -8,6 +8,7 @@ import psycopg
 
 import config
 import encoder
+import reranker
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -129,23 +130,15 @@ def search(conn, query, tipo=None, servico=None, top_n=None):
         rrf[cid] = rrf.get(cid, 0.0) + 1.0 / (config.RRF_K + rank)
         doc_of[cid] = did
 
-    fused = sorted(rrf.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
-    top_cos = max((cos_by_chunk.get(cid, 0.0) for cid, _ in fused), default=0.0)
-    # Gate HIBRIDO: cosseno (confianca semantica) OU o #1 fundido e um match lexico
-    # forte (token exato — codigo de erro/sigla, onde o denso e fraco). Sem reranker
-    # ainda; quando ligado, o score do reranker substitui este gate.
-    lex_top3 = {r[0] for r in lexical[:3]}
-    lex_forte = bool(fused) and fused[0][0] in lex_top3
-    if top_cos >= config.GROUNDING_THRESHOLD:
-        motivo = "cosseno"
-    elif lex_forte:
-        motivo = "lexico"
-    else:
-        motivo = "orfao"
-    grounded = motivo != "orfao"
+    fused_all = sorted(rrf.items(), key=lambda kv: kv[1], reverse=True)
+    usar_rerank = reranker.enabled()
+    # Com reranker ligado puxamos um POOL maior (RERANK_CANDIDATES) para ele reordenar;
+    # sem reranker, o pool ja e o top_n final (comportamento inalterado).
+    pool = fused_all[: (config.RERANK_CANDIDATES if usar_rerank else top_n)]
+    top_cos = max((cos_by_chunk.get(cid, 0.0) for cid, _ in pool), default=0.0)
 
     resultados = []
-    for cid, score in fused:
+    for cid, score in pool:
         row = conn.execute(
             """SELECT d.id,d.tipo,d.titulo,d.produto,d.servico,d.source_url,
                       d.origem_run_url,c.conteudo
@@ -161,11 +154,46 @@ def search(conn, query, tipo=None, servico=None, top_n=None):
             "origem_run_url": row[6],
             "cos": round(cos_by_chunk.get(cid, 0.0), 4), "rrf": round(score, 5),
             "snippet": conteudo[:400] + ("..." if len(conteudo) > 400 else ""),
+            "_rerank_text": ((row[2] or "") + "\n" + conteudo).strip(),  # titulo + conteudo
         })
+
+    # ---- Reranker (cross-encoder): reordena o pool; seu score SUBSTITUI o gate. ----
+    reranker_usado = False
+    if usar_rerank and resultados:
+        scores = reranker.rerank(query, [r["_rerank_text"] for r in resultados])
+        if scores is not None:  # None = desligado/falhou -> mantem ordem do RRF
+            for r, s in zip(resultados, scores):
+                r["rerank"] = round(float(s), 5)
+            resultados.sort(key=lambda r: r.get("rerank", 0.0), reverse=True)
+            reranker_usado = True
+    for r in resultados:
+        r.pop("_rerank_text", None)
+    resultados = resultados[:top_n]
+
+    # ---- Gate de grounding ----
+    if reranker_usado:
+        top_rr = resultados[0].get("rerank", 0.0) if resultados else 0.0
+        grounded = top_rr >= config.RERANKER_THRESHOLD
+        motivo = "reranker" if grounded else "orfao"
+        threshold = config.RERANKER_THRESHOLD
+    else:
+        # Gate HIBRIDO: cosseno (confianca semantica) OU o #1 fundido e um match lexico
+        # forte (token exato — codigo de erro/sigla, onde o denso e fraco).
+        lex_top3 = {r[0] for r in lexical[:3]}
+        lex_forte = bool(pool) and pool[0][0] in lex_top3
+        if top_cos >= config.GROUNDING_THRESHOLD:
+            motivo = "cosseno"
+        elif lex_forte:
+            motivo = "lexico"
+        else:
+            motivo = "orfao"
+        grounded = motivo != "orfao"
+        threshold = config.GROUNDING_THRESHOLD
+
     return {
         "query": query, "tipo": tipo, "servico": servico,
         "grounded": grounded, "motivo": motivo, "top_cos": round(top_cos, 4),
-        "threshold": config.GROUNDING_THRESHOLD,
+        "threshold": threshold, "reranker_usado": reranker_usado,
         "n_dense": len(dense), "n_lexical": len(lexical),
         "resultados": resultados,
     }

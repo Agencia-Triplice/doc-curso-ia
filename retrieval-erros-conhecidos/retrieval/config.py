@@ -38,11 +38,32 @@ K_DENSE = 50
 K_LEXICAL = 50
 TOP_N = 12
 
+# ---- Reranker (cross-encoder, OPT-IN) ---------------------------------------
+# Maior alavanca de precisao: reranqueia o pool do RRF com um cross-encoder e o score
+# dele SUBSTITUI o gate de cosseno. Desligado por default (comportamento inalterado).
+RERANKER_ENABLED = os.environ.get("RETRIEVAL_RERANKER", "0") == "1"
+RERANKER_PROVIDER = os.environ.get("RETRIEVAL_RERANKER_PROVIDER", "jina")
+RERANKER_MODEL = os.environ.get("RETRIEVAL_RERANKER_MODEL",
+                                "jina-reranker-v2-base-multilingual")
+RERANKER_ENDPOINT = os.environ.get("RETRIEVAL_RERANKER_ENDPOINT",
+                                   "https://api.jina.ai/v1/rerank")
+# Candidatos do RRF que entram no reranker (pool); ele reordena e corta em TOP_N.
+RERANK_CANDIDATES = int(os.environ.get("RETRIEVAL_RERANK_CANDIDATES", "30"))
+# Gate de grounding no score do reranker (escala 0..1, DIFERENTE do cosseno). Recalibrar.
+RERANKER_THRESHOLD = float(os.environ.get("RETRIEVAL_RERANKER_THRESHOLD", "0.30"))
+
 _KEY_PATHS = [
     os.environ.get("RETRIEVAL_OPENAI_KEY_PATH", ""),
     "/mnt/c/Users/Tiago/.claude/openai.txt",  # WSL
     str(pathlib.Path.home() / ".claude" / "openai.txt"),
     r"C:\Users\Tiago\.claude\openai.txt",
+]
+
+_RERANK_KEY_PATHS = [
+    os.environ.get("RETRIEVAL_RERANKER_KEY_PATH", ""),
+    "/mnt/c/Users/Tiago/.claude/jina.txt",  # WSL
+    str(pathlib.Path.home() / ".claude" / "jina.txt"),
+    r"C:\Users\Tiago\.claude\jina.txt",
 ]
 
 
@@ -54,3 +75,13 @@ def openai_key() -> str:
         if p and os.path.isfile(p):
             return pathlib.Path(p).read_text(encoding="utf-8").strip()
     raise RuntimeError("chave OpenAI nao encontrada (arquivo ~/.claude/openai.txt)")
+
+
+def reranker_key() -> str:
+    env = os.environ.get("RERANKER_API_KEY") or os.environ.get("JINA_API_KEY")
+    if env:
+        return env.strip()
+    for p in _RERANK_KEY_PATHS:
+        if p and os.path.isfile(p):
+            return pathlib.Path(p).read_text(encoding="utf-8").strip()
+    raise RuntimeError("chave do reranker nao encontrada (~/.claude/jina.txt ou RERANKER_API_KEY)")

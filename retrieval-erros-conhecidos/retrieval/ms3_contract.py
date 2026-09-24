@@ -31,9 +31,10 @@ def to_search_response(engine) -> dict:
     hits = [{"id": h.get("documento_id"), "titulo": h.get("titulo"),
              "conteudo": h.get("snippet"), "servico": h.get("servico"),
              "nivel": h.get("nivel"), "tags": h.get("tags") or [],
-             "score_rrf": h.get("rrf"), "score_reranker": None,
+             "score_rrf": h.get("rrf"), "score_reranker": h.get("rerank"),
              "confianca": h.get("cos")} for h in res]
     return {"grounded": grounded, "doc_id": doc_id, "confianca": confianca,
             "resultados": hits,
-            "componentes": {"bm25": True, "denso": True, "reranker": False},
+            "componentes": {"bm25": True, "denso": True,
+                            "reranker": bool(engine.get("reranker_usado"))},
             "orfao_registrado": False}
